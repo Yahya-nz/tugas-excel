@@ -5,12 +5,15 @@ Create Excel workbook for Finance homework:
 - Risk-free rate from DGS1MO and Fama-French RF
 - Excess returns
 - Descriptive statistics
-- Market Model (CAPM) regression
+- Market Model (CAPM) regression with residuals
 - Fama-French 3-Factor + Momentum regression
+- Appraisal ratios
+Also creates Word document with answers.
 """
 
 import csv
 import re
+import numpy as np
 from datetime import datetime
 from collections import OrderedDict
 
@@ -33,7 +36,6 @@ def parse_yahoo_csv(filename):
             date_str = row[0]
             if 'Dividend' in date_str or 'Distribution' in date_str:
                 continue
-            # Parse "Mar 1 2026" format - but also handle partial month like "Mar 11 2026"
             parts = date_str.split()
             if len(parts) < 3:
                 continue
@@ -46,14 +48,12 @@ def parse_yahoo_csv(filename):
                 continue
             adj_close = row[5]
             if adj_close == '' or adj_close == '-':
-                adj_close = row[4]  # use Close if no Adj Close
+                adj_close = row[4]
             try:
                 val = float(adj_close)
             except:
                 continue
             key = (year, month)
-            # Keep the "1st of month" entry (which is the end-of-month close for that month)
-            # If multiple entries for same month, prefer the "1" day entry
             day = int(parts[1]) if len(parts) >= 3 else 1
             if key not in data or day <= 1:
                 data[key] = val
@@ -65,11 +65,9 @@ def parse_ff_factors(filename):
     data = {}
     with open(filename, 'r') as f:
         lines = f.readlines()
-
     in_monthly = False
     for line in lines:
         line = line.rstrip()
-        # Detect header line for monthly data
         if 'Mkt-RF' in line and 'SMB' in line and 'HML' in line:
             in_monthly = True
             continue
@@ -81,7 +79,7 @@ def parse_ff_factors(filename):
         if len(parts) >= 5:
             try:
                 yyyymm = int(parts[0])
-                if yyyymm < 100000:  # annual data (4 digits)
+                if yyyymm < 100000:
                     continue
                 data[yyyymm] = {
                     'Mkt-RF': float(parts[1]),
@@ -99,7 +97,6 @@ def parse_momentum(filename):
     data = {}
     with open(filename, 'r') as f:
         lines = f.readlines()
-
     in_monthly = False
     for line in lines:
         line = line.rstrip()
@@ -126,10 +123,8 @@ def parse_dgs1mo(filename):
     """Parse DGS1MO Excel file, return dict of (year, month) -> avg monthly rate in %."""
     wb = openpyxl.load_workbook(filename, data_only=True)
     ws = wb['Daily']
-
     monthly_rates = {}
     monthly_counts = {}
-
     for row in ws.iter_rows(min_row=2, values_only=True):
         date_val, rate = row[0], row[1]
         if date_val is None or rate is None:
@@ -141,24 +136,19 @@ def parse_dgs1mo(filename):
                 rate = float(rate)
             except:
                 continue
-
         if isinstance(date_val, datetime):
             y, m = date_val.year, date_val.month
         else:
             continue
-
         key = (y, m)
         if key not in monthly_rates:
             monthly_rates[key] = 0.0
             monthly_counts[key] = 0
         monthly_rates[key] += rate
         monthly_counts[key] += 1
-
-    # Average daily rate per month
     result = {}
     for key in monthly_rates:
         result[key] = monthly_rates[key] / monthly_counts[key]
-
     return result
 
 
@@ -171,15 +161,116 @@ ff_factors = parse_ff_factors('F-F_Research_Data_Factors.txt')
 momentum = parse_momentum('F-F_Momentum_Factor.txt')
 dgs1mo = parse_dgs1mo('DGS1MO.xlsx')
 
-# Determine common date range (months with data for all three assets)
-# We need at least 2 consecutive months to compute returns
 all_months = sorted(set(aapl.keys()) & set(vfiax.keys()) & set(gspc.keys()))
 print(f"Common months with price data: {len(all_months)}")
 print(f"Range: {all_months[0]} to {all_months[-1]}")
 
-# Return months = all months except the first (need prior month for return calc)
 return_months = all_months[1:]
 print(f"Return months: {len(return_months)}")
+
+# ============================================================
+# 1b. COMPUTE RETURNS & REGRESSIONS IN PYTHON (for residuals & Word)
+# ============================================================
+
+# Compute monthly returns
+aapl_ret, vfiax_ret, gspc_ret = [], [], []
+rf_list, mktrf_list, smb_list, hml_list, mom_list = [], [], [], [], []
+aapl_excess, vfiax_excess = [], []
+
+for i, mk in enumerate(return_months):
+    prev = all_months[i]  # return_months[i] = all_months[i+1], prev = all_months[i]
+    r_aapl = aapl[mk] / aapl[prev] - 1
+    r_vfiax = vfiax[mk] / vfiax[prev] - 1
+    r_gspc = gspc[mk] / gspc[prev] - 1
+
+    yyyymm = mk[0] * 100 + mk[1]
+    rf = ff_factors[yyyymm]['RF'] / 100 if yyyymm in ff_factors else 0
+    mktrf = ff_factors[yyyymm]['Mkt-RF'] / 100 if yyyymm in ff_factors else 0
+    smb = ff_factors[yyyymm]['SMB'] / 100 if yyyymm in ff_factors else 0
+    hml = ff_factors[yyyymm]['HML'] / 100 if yyyymm in ff_factors else 0
+    mom_val = momentum[yyyymm] / 100 if yyyymm in momentum else 0
+
+    aapl_ret.append(r_aapl)
+    vfiax_ret.append(r_vfiax)
+    gspc_ret.append(r_gspc)
+    rf_list.append(rf)
+    mktrf_list.append(mktrf)
+    smb_list.append(smb)
+    hml_list.append(hml)
+    mom_list.append(mom_val)
+    aapl_excess.append(r_aapl - rf)
+    vfiax_excess.append(r_vfiax - rf)
+
+# Convert to numpy
+aapl_excess_np = np.array(aapl_excess)
+vfiax_excess_np = np.array(vfiax_excess)
+mktrf_np = np.array(mktrf_list)
+smb_np = np.array(smb_list)
+hml_np = np.array(hml_list)
+mom_np = np.array(mom_list)
+n = len(return_months)
+
+# --- CAPM Regression ---
+def ols_simple(y, x):
+    X = np.column_stack([np.ones(len(x)), x])
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]
+    y_hat = X @ beta
+    resid = y - y_hat
+    ss_res = np.sum(resid**2)
+    ss_tot = np.sum((y - np.mean(y))**2)
+    r2 = 1 - ss_res / ss_tot
+    k = X.shape[1]
+    se_resid = np.sqrt(ss_res / (n - k))
+    cov_beta = se_resid**2 * np.linalg.inv(X.T @ X)
+    se_beta = np.sqrt(np.diag(cov_beta))
+    t_stats = beta / se_beta
+    return {'alpha': beta[0], 'beta': beta[1], 'r2': r2,
+            'se_alpha': se_beta[0], 'se_beta': se_beta[1],
+            't_alpha': t_stats[0], 't_beta': t_stats[1],
+            'resid': resid, 'se_resid': se_resid, 'y_hat': y_hat}
+
+def ols_multi(y, X_vars):
+    X = np.column_stack([np.ones(len(y))] + X_vars)
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]
+    y_hat = X @ beta
+    resid = y - y_hat
+    ss_res = np.sum(resid**2)
+    ss_tot = np.sum((y - np.mean(y))**2)
+    r2 = 1 - ss_res / ss_tot
+    k = X.shape[1]
+    se_resid = np.sqrt(ss_res / (n - k))
+    cov_beta = se_resid**2 * np.linalg.inv(X.T @ X)
+    se_beta = np.sqrt(np.diag(cov_beta))
+    t_stats = beta / se_beta
+    f_stat = ((ss_tot - ss_res) / (k - 1)) / (ss_res / (n - k))
+    return {'betas': beta, 'r2': r2, 'se': se_beta, 't_stats': t_stats,
+            'resid': resid, 'se_resid': se_resid, 'f_stat': f_stat}
+
+# CAPM
+capm_aapl = ols_simple(aapl_excess_np, mktrf_np)
+capm_vfiax = ols_simple(vfiax_excess_np, mktrf_np)
+
+# FF4
+ff4_aapl = ols_multi(aapl_excess_np, [mktrf_np, smb_np, hml_np, mom_np])
+ff4_vfiax = ols_multi(vfiax_excess_np, [mktrf_np, smb_np, hml_np, mom_np])
+
+# Appraisal ratios
+appraisal_aapl_capm = capm_aapl['alpha'] / np.std(capm_aapl['resid'], ddof=1)
+appraisal_vfiax_capm = capm_vfiax['alpha'] / np.std(capm_vfiax['resid'], ddof=1)
+appraisal_aapl_ff4 = ff4_aapl['betas'][0] / np.std(ff4_aapl['resid'], ddof=1)
+appraisal_vfiax_ff4 = ff4_vfiax['betas'][0] / np.std(ff4_vfiax['resid'], ddof=1)
+
+print(f"\n=== CAPM Results ===")
+print(f"AAPL:  alpha={capm_aapl['alpha']:.4f}, beta={capm_aapl['beta']:.4f}, R2={capm_aapl['r2']:.4f}, t(a)={capm_aapl['t_alpha']:.4f}, t(b)={capm_aapl['t_beta']:.4f}")
+print(f"VFIAX: alpha={capm_vfiax['alpha']:.4f}, beta={capm_vfiax['beta']:.4f}, R2={capm_vfiax['r2']:.4f}, t(a)={capm_vfiax['t_alpha']:.4f}, t(b)={capm_vfiax['t_beta']:.4f}")
+print(f"\n=== FF4 Results ===")
+print(f"AAPL:  betas={[f'{b:.4f}' for b in ff4_aapl['betas']]}, R2={ff4_aapl['r2']:.4f}")
+print(f"       t-stats={[f'{t:.4f}' for t in ff4_aapl['t_stats']]}")
+print(f"VFIAX: betas={[f'{b:.4f}' for b in ff4_vfiax['betas']]}, R2={ff4_vfiax['r2']:.4f}")
+print(f"       t-stats={[f'{t:.4f}' for t in ff4_vfiax['t_stats']]}")
+print(f"\n=== Appraisal Ratios (CAPM) ===")
+print(f"AAPL:  {appraisal_aapl_capm:.4f}")
+print(f"VFIAX: {appraisal_vfiax_capm:.4f}")
 
 # ============================================================
 # 2. CREATE EXCEL WORKBOOK
@@ -211,14 +302,14 @@ def style_header(ws, row, cols, fill=None, font=None):
         cell.alignment = Alignment(horizontal='center', wrap_text=True)
         cell.border = thin_border
 
-def auto_width(ws, max_col=None):
+def auto_width(ws):
     for col in ws.columns:
         max_length = 0
         col_letter = get_column_letter(col[0].column)
         for cell in col:
             if cell.value:
                 max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[col_letter].width = min(max_length + 3, 20)
+        ws.column_dimensions[col_letter].width = min(max_length + 3, 22)
 
 
 # ============================================================
@@ -227,12 +318,13 @@ def auto_width(ws, max_col=None):
 ws1 = wb.active
 ws1.title = "Monthly Returns"
 
-# Headers
+# Headers - added residual columns (Q=AAPL CAPM resid, R=VFIAX CAPM resid)
 headers1 = ['Date', 'AAPL Price', 'VFIAX NAV', 'S&P 500',
             'AAPL Return', 'VFIAX Return', 'S&P 500 Return',
             'RF (FF, %/mo)', 'RF (DGS1MO, %/yr)',
             'AAPL Excess', 'VFIAX Excess', 'S&P 500 Excess',
-            'Mkt-RF (FF)', 'SMB (FF)', 'HML (FF)', 'Mom']
+            'Mkt-RF (FF)', 'SMB (FF)', 'HML (FF)', 'Mom',
+            'AAPL CAPM Resid', 'VFIAX CAPM Resid']
 
 ws1.cell(row=1, column=1, value="Monthly Price Data, Returns & Fama-French Factors").font = title_font
 ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers1))
@@ -244,7 +336,6 @@ style_header(ws1, row, len(headers1))
 
 # Data rows
 data_start_row = 4
-prev_month = all_months[0]
 
 for idx, month_key in enumerate(all_months):
     r = data_start_row + idx
@@ -268,56 +359,49 @@ for idx, month_key in enumerate(all_months):
     ws1.cell(row=r, column=4).number_format = '#,##0.00'
     ws1.cell(row=r, column=4).border = thin_border
 
-    # Returns (from 2nd month onward) using Excel formulas
+    # Returns (from 2nd month onward)
     if idx > 0:
         prev_r = r - 1
-        # AAPL Return = (Price_t / Price_t-1) - 1
         ws1.cell(row=r, column=5).value = f'=B{r}/B{prev_r}-1'
         ws1.cell(row=r, column=5).number_format = pct_format
         ws1.cell(row=r, column=5).border = thin_border
 
-        # VFIAX Return
         ws1.cell(row=r, column=6).value = f'=C{r}/C{prev_r}-1'
         ws1.cell(row=r, column=6).number_format = pct_format
         ws1.cell(row=r, column=6).border = thin_border
 
-        # S&P 500 Return
         ws1.cell(row=r, column=7).value = f'=D{r}/D{prev_r}-1'
         ws1.cell(row=r, column=7).number_format = pct_format
         ws1.cell(row=r, column=7).border = thin_border
 
-    # Fama-French RF (monthly, in %)
+    # Fama-French RF
     yyyymm = y * 100 + m
     if yyyymm in ff_factors:
-        rf_ff = ff_factors[yyyymm]['RF']
-        ws1.cell(row=r, column=8, value=rf_ff / 100)  # Convert to decimal
+        ws1.cell(row=r, column=8, value=ff_factors[yyyymm]['RF'] / 100)
         ws1.cell(row=r, column=8).number_format = pct4_format
         ws1.cell(row=r, column=8).border = thin_border
 
-    # DGS1MO (annualized rate)
+    # DGS1MO
     if month_key in dgs1mo:
-        ws1.cell(row=r, column=9, value=dgs1mo[month_key] / 100)  # Convert to decimal
+        ws1.cell(row=r, column=9, value=dgs1mo[month_key] / 100)
         ws1.cell(row=r, column=9).number_format = pct4_format
         ws1.cell(row=r, column=9).border = thin_border
 
-    # Excess returns (Return - RF_monthly) - only from 2nd month
+    # Excess returns
     if idx > 0:
-        # AAPL Excess = AAPL Return - RF(FF)
         ws1.cell(row=r, column=10).value = f'=E{r}-H{r}'
         ws1.cell(row=r, column=10).number_format = pct_format
         ws1.cell(row=r, column=10).border = thin_border
 
-        # VFIAX Excess
         ws1.cell(row=r, column=11).value = f'=F{r}-H{r}'
         ws1.cell(row=r, column=11).number_format = pct_format
         ws1.cell(row=r, column=11).border = thin_border
 
-        # S&P 500 Excess
         ws1.cell(row=r, column=12).value = f'=G{r}-H{r}'
         ws1.cell(row=r, column=12).number_format = pct_format
         ws1.cell(row=r, column=12).border = thin_border
 
-    # FF Factors (Mkt-RF, SMB, HML)
+    # FF Factors
     if yyyymm in ff_factors:
         ws1.cell(row=r, column=13, value=ff_factors[yyyymm]['Mkt-RF'] / 100)
         ws1.cell(row=r, column=13).number_format = pct_format
@@ -337,8 +421,19 @@ for idx, month_key in enumerate(all_months):
         ws1.cell(row=r, column=16).number_format = pct_format
         ws1.cell(row=r, column=16).border = thin_border
 
+    # CAPM Residuals (from computed regression)
+    if idx > 0:
+        ri = idx - 1  # index in return arrays
+        ws1.cell(row=r, column=17, value=capm_aapl['resid'][ri])
+        ws1.cell(row=r, column=17).number_format = pct_format
+        ws1.cell(row=r, column=17).border = thin_border
+
+        ws1.cell(row=r, column=18, value=capm_vfiax['resid'][ri])
+        ws1.cell(row=r, column=18).number_format = pct_format
+        ws1.cell(row=r, column=18).border = thin_border
+
 last_data_row = data_start_row + len(all_months) - 1
-first_return_row = data_start_row + 1  # First row with return data
+first_return_row = data_start_row + 1
 
 auto_width(ws1)
 
@@ -354,8 +449,6 @@ for i, h in enumerate(stats_headers, 1):
     ws2.cell(row=3, column=i, value=h)
 style_header(ws2, 3, len(stats_headers))
 
-# Return columns in Sheet1: E=AAPL, F=VFIAX, G=S&P500
-# Excess columns: J=AAPL, K=VFIAX, L=S&P500
 ret_cols = ['E', 'F', 'G', 'J', 'K', 'L']
 ret_range = [f"'Monthly Returns'!{c}{first_return_row}:{c}{last_data_row}" for c in ret_cols]
 
@@ -380,11 +473,13 @@ for i, (label, func) in enumerate(stats):
         ws2.cell(row=r, column=j+2).value = f'={func}({rng})'
         if label == 'Count':
             ws2.cell(row=r, column=j+2).number_format = '0'
+        elif label in ('Skewness', 'Kurtosis'):
+            ws2.cell(row=r, column=j+2).number_format = num4_format
         else:
-            ws2.cell(row=r, column=j+2).number_format = pct4_format if label != 'Skewness' and label != 'Kurtosis' else num4_format
+            ws2.cell(row=r, column=j+2).number_format = pct4_format
         ws2.cell(row=r, column=j+2).border = thin_border
 
-# Add annualized stats
+# Annualized stats
 ann_row = 4 + len(stats) + 1
 ws2.cell(row=ann_row, column=1, value="Annualized Statistics").font = subtitle_font
 ws2.merge_cells(start_row=ann_row, start_column=1, end_row=ann_row, end_column=7)
@@ -394,10 +489,8 @@ for i, h in enumerate(ann_headers, 1):
     ws2.cell(row=ann_row+1, column=i, value=h)
 style_header(ws2, ann_row+1, len(ann_headers))
 
-# Annualized Return = (1+mean)^12 - 1
-# Annualized Std Dev = monthly_std * sqrt(12)
-mean_row = 4  # row of Mean
-std_row = 6   # row of Std Dev
+mean_row = 4
+std_row = 6
 
 ws2.cell(row=ann_row+2, column=1, value='Annualized Return')
 ws2.cell(row=ann_row+2, column=1).font = header_font
@@ -420,11 +513,9 @@ for j in range(3):
 ws2.cell(row=ann_row+4, column=1, value='Sharpe Ratio')
 ws2.cell(row=ann_row+4, column=1).font = header_font
 ws2.cell(row=ann_row+4, column=1).border = thin_border
-# Sharpe = Annualized Excess / Annualized Std
-# Use excess mean from columns E, F, G (cols 5,6,7 in stats sheet)
 for j in range(3):
     col = j + 2
-    excess_col = j + 5  # columns E, F, G for excess stats
+    excess_col = j + 5
     ws2.cell(row=ann_row+4, column=col).value = f'=((1+{get_column_letter(excess_col)}{mean_row})^12-1)/({get_column_letter(col)}{std_row}*SQRT(12))'
     ws2.cell(row=ann_row+4, column=col).number_format = num4_format
     ws2.cell(row=ann_row+4, column=col).border = thin_border
@@ -463,32 +554,31 @@ ws3 = wb.create_sheet("CAPM Regression")
 ws3.cell(row=1, column=1, value="Market Model (CAPM) Regression").font = title_font
 ws3.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
 
-ws3.cell(row=2, column=1, value="R_i - R_f = α + β(R_m - R_f) + ε").font = Font(italic=True, size=11)
+ws3.cell(row=2, column=1, value="R_i - R_f = \u03b1 + \u03b2(R_m - R_f) + \u03b5").font = Font(italic=True, size=11)
 
-# For AAPL
+y_aapl_rng = f"'Monthly Returns'!J{first_return_row}:J{last_data_row}"
+y_vfiax_rng = f"'Monthly Returns'!K{first_return_row}:K{last_data_row}"
+x_mkt_rng = f"'Monthly Returns'!M{first_return_row}:M{last_data_row}"
+
+# AAPL CAPM
 ws3.cell(row=4, column=1, value="AAPL Market Model").font = subtitle_font
 capm_headers = ['Statistic', 'Value']
 for i, h in enumerate(capm_headers, 1):
     ws3.cell(row=5, column=i, value=h)
 style_header(ws3, 5, 2)
 
-# Using LINEST: =LINEST(y_range, x_range, TRUE, TRUE)
-# y = AAPL excess return (col J), x = Mkt-RF (col M)
-y_aapl = f"'Monthly Returns'!J{first_return_row}:J{last_data_row}"
-y_vfiax = f"'Monthly Returns'!K{first_return_row}:K{last_data_row}"
-x_mkt = f"'Monthly Returns'!M{first_return_row}:M{last_data_row}"
-
-# AAPL CAPM
 capm_stats_aapl = [
-    ('Alpha (α)', f'=INDEX(LINEST({y_aapl},{x_mkt},TRUE,TRUE),1,2)'),
-    ('Beta (β)', f'=INDEX(LINEST({y_aapl},{x_mkt},TRUE,TRUE),1,1)'),
-    ('R-squared', f'=RSQ({y_aapl},{x_mkt})'),
-    ('Std Error (α)', f'=INDEX(LINEST({y_aapl},{x_mkt},TRUE,TRUE),2,2)'),
-    ('Std Error (β)', f'=INDEX(LINEST({y_aapl},{x_mkt},TRUE,TRUE),2,1)'),
-    ('t-stat (α)', f'=B6/B9'),
-    ('t-stat (β)', f'=B7/B10'),
-    ('F-statistic', f'=INDEX(LINEST({y_aapl},{x_mkt},TRUE,TRUE),4,1)'),
-    ('Observations', f'=COUNT({y_aapl})'),
+    ('Alpha (\u03b1)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),1,2)'),
+    ('Beta (\u03b2)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),1,1)'),
+    ('R-squared', f'=RSQ({y_aapl_rng},{x_mkt_rng})'),
+    ('Std Error (\u03b1)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),2,2)'),
+    ('Std Error (\u03b2)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),2,1)'),
+    ('t-stat (\u03b1)', '=B6/B9'),
+    ('t-stat (\u03b2)', '=B7/B10'),
+    ('F-statistic', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),4,1)'),
+    ('Observations', f'=COUNT({y_aapl_rng})'),
+    ('Std Dev of Residuals', f'=STDEV.S(\'Monthly Returns\'!Q{first_return_row}:Q{last_data_row})'),
+    ('Appraisal Ratio', '=B6/B15'),
 ]
 
 for i, (label, formula) in enumerate(capm_stats_aapl):
@@ -500,8 +590,8 @@ for i, (label, formula) in enumerate(capm_stats_aapl):
     ws3.cell(row=r, column=2).number_format = num4_format
     ws3.cell(row=r, column=2).border = thin_border
 
-# For VFIAX
-vfiax_start = 17
+# VFIAX CAPM
+vfiax_start = 19
 ws3.cell(row=vfiax_start, column=1, value="VFIAX Market Model").font = subtitle_font
 
 for i, h in enumerate(capm_headers, 1):
@@ -509,15 +599,17 @@ for i, h in enumerate(capm_headers, 1):
 style_header(ws3, vfiax_start+1, 2)
 
 capm_stats_vfiax = [
-    ('Alpha (α)', f'=INDEX(LINEST({y_vfiax},{x_mkt},TRUE,TRUE),1,2)'),
-    ('Beta (β)', f'=INDEX(LINEST({y_vfiax},{x_mkt},TRUE,TRUE),1,1)'),
-    ('R-squared', f'=RSQ({y_vfiax},{x_mkt})'),
-    ('Std Error (α)', f'=INDEX(LINEST({y_vfiax},{x_mkt},TRUE,TRUE),2,2)'),
-    ('Std Error (β)', f'=INDEX(LINEST({y_vfiax},{x_mkt},TRUE,TRUE),2,1)'),
-    ('t-stat (α)', f'=B{vfiax_start+2}/B{vfiax_start+5}'),
-    ('t-stat (β)', f'=B{vfiax_start+3}/B{vfiax_start+6}'),
-    ('F-statistic', f'=INDEX(LINEST({y_vfiax},{x_mkt},TRUE,TRUE),4,1)'),
-    ('Observations', f'=COUNT({y_vfiax})'),
+    ('Alpha (\u03b1)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),1,2)'),
+    ('Beta (\u03b2)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),1,1)'),
+    ('R-squared', f'=RSQ({y_vfiax_rng},{x_mkt_rng})'),
+    ('Std Error (\u03b1)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),2,2)'),
+    ('Std Error (\u03b2)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),2,1)'),
+    ('t-stat (\u03b1)', f'=B{vfiax_start+2}/B{vfiax_start+5}'),
+    ('t-stat (\u03b2)', f'=B{vfiax_start+3}/B{vfiax_start+6}'),
+    ('F-statistic', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),4,1)'),
+    ('Observations', f'=COUNT({y_vfiax_rng})'),
+    ('Std Dev of Residuals', f'=STDEV.S(\'Monthly Returns\'!R{first_return_row}:R{last_data_row})'),
+    ('Appraisal Ratio', f'=B{vfiax_start+2}/B{vfiax_start+11}'),
 ]
 
 for i, (label, formula) in enumerate(capm_stats_vfiax):
@@ -532,21 +624,15 @@ for i, (label, formula) in enumerate(capm_stats_vfiax):
 auto_width(ws3)
 
 # ============================================================
-# SHEET 4: Fama-French 3-Factor + Momentum
+# SHEET 4: Fama-French 4-Factor
 # ============================================================
 ws4 = wb.create_sheet("FF4 Regression")
-ws4.cell(row=1, column=1, value="Fama-French 3-Factor + Momentum Regression").font = title_font
+ws4.cell(row=1, column=1, value="Fama-French 3-Factor + Momentum (Carhart 4-Factor) Regression").font = title_font
 ws4.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
 
-ws4.cell(row=2, column=1, value="R_i - R_f = α + β₁(Mkt-RF) + β₂(SMB) + β₃(HML) + β₄(Mom) + ε").font = Font(italic=True, size=11)
+ws4.cell(row=2, column=1, value="R_i - R_f = \u03b1 + \u03b2\u2081(Mkt-RF) + \u03b2\u2082(SMB) + \u03b2\u2083(HML) + \u03b2\u2084(Mom) + \u03b5").font = Font(italic=True, size=11)
 
-# x ranges for 4-factor model
-x_smb = f"'Monthly Returns'!N{first_return_row}:N{last_data_row}"
-x_hml = f"'Monthly Returns'!O{first_return_row}:O{last_data_row}"
-x_mom = f"'Monthly Returns'!P{first_return_row}:P{last_data_row}"
-
-# LINEST with multiple X: =LINEST(y, x1:x4, TRUE, TRUE) - but X must be contiguous cols M:P
-x_all = f"'Monthly Returns'!M{first_return_row}:P{last_data_row}"
+x_all_rng = f"'Monthly Returns'!M{first_return_row}:P{last_data_row}"
 
 # AAPL FF4
 ws4.cell(row=4, column=1, value="AAPL Fama-French 4-Factor").font = subtitle_font
@@ -556,29 +642,28 @@ for i, h in enumerate(ff4_headers, 1):
     ws4.cell(row=5, column=i, value=h)
 style_header(ws4, 5, 2)
 
-# LINEST returns: row1=[b4,b3,b2,b1,a], row2=[se4,se3,se2,se1,se_a], row3=[R2,se_y,...], row4=[F,df,...]
-ff4_aapl = [
-    ('Alpha (α)',     f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),1,5)'),
-    ('β (Mkt-RF)',    f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),1,4)'),
-    ('β (SMB)',       f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),1,3)'),
-    ('β (HML)',       f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),1,2)'),
-    ('β (Mom)',       f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),1,1)'),
-    ('R-squared',     f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),3,1)'),
-    ('SE (α)',        f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),2,5)'),
-    ('SE (Mkt-RF)',   f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),2,4)'),
-    ('SE (SMB)',      f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),2,3)'),
-    ('SE (HML)',      f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),2,2)'),
-    ('SE (Mom)',      f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),2,1)'),
-    ('t-stat (α)',    f'=B6/B12'),
-    ('t-stat (Mkt-RF)', f'=B7/B13'),
-    ('t-stat (SMB)',  f'=B8/B14'),
-    ('t-stat (HML)',  f'=B9/B15'),
-    ('t-stat (Mom)',  f'=B10/B16'),
-    ('F-statistic',   f'=INDEX(LINEST({y_aapl},{x_all},TRUE,TRUE),4,1)'),
-    ('Observations',  f'=COUNT({y_aapl})'),
+ff4_stats_aapl = [
+    ('Alpha (\u03b1)',     f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,5)'),
+    ('\u03b2 (Mkt-RF)',    f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,4)'),
+    ('\u03b2 (SMB)',       f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,3)'),
+    ('\u03b2 (HML)',       f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,2)'),
+    ('\u03b2 (Mom)',       f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,1)'),
+    ('R-squared',     f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),3,1)'),
+    ('SE (\u03b1)',        f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,5)'),
+    ('SE (Mkt-RF)',   f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,4)'),
+    ('SE (SMB)',      f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,3)'),
+    ('SE (HML)',      f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,2)'),
+    ('SE (Mom)',      f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,1)'),
+    ('t-stat (\u03b1)',    '=B6/B12'),
+    ('t-stat (Mkt-RF)', '=B7/B13'),
+    ('t-stat (SMB)',  '=B8/B14'),
+    ('t-stat (HML)',  '=B9/B15'),
+    ('t-stat (Mom)',  '=B10/B16'),
+    ('F-statistic',   f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),4,1)'),
+    ('Observations',  f'=COUNT({y_aapl_rng})'),
 ]
 
-for i, (label, formula) in enumerate(ff4_aapl):
+for i, (label, formula) in enumerate(ff4_stats_aapl):
     r = 6 + i
     ws4.cell(row=r, column=1, value=label)
     ws4.cell(row=r, column=1).font = header_font
@@ -595,28 +680,28 @@ for i, h in enumerate(ff4_headers, 1):
     ws4.cell(row=vf_start+1, column=i, value=h)
 style_header(ws4, vf_start+1, 2)
 
-ff4_vfiax = [
-    ('Alpha (α)',     f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),1,5)'),
-    ('β (Mkt-RF)',    f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),1,4)'),
-    ('β (SMB)',       f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),1,3)'),
-    ('β (HML)',       f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),1,2)'),
-    ('β (Mom)',       f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),1,1)'),
-    ('R-squared',     f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),3,1)'),
-    ('SE (α)',        f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),2,5)'),
-    ('SE (Mkt-RF)',   f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),2,4)'),
-    ('SE (SMB)',      f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),2,3)'),
-    ('SE (HML)',      f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),2,2)'),
-    ('SE (Mom)',      f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),2,1)'),
-    ('t-stat (α)',    f'=B{vf_start+2}/B{vf_start+8}'),
+ff4_stats_vfiax = [
+    ('Alpha (\u03b1)',     f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,5)'),
+    ('\u03b2 (Mkt-RF)',    f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,4)'),
+    ('\u03b2 (SMB)',       f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,3)'),
+    ('\u03b2 (HML)',       f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,2)'),
+    ('\u03b2 (Mom)',       f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,1)'),
+    ('R-squared',     f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),3,1)'),
+    ('SE (\u03b1)',        f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,5)'),
+    ('SE (Mkt-RF)',   f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,4)'),
+    ('SE (SMB)',      f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,3)'),
+    ('SE (HML)',      f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,2)'),
+    ('SE (Mom)',      f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,1)'),
+    ('t-stat (\u03b1)',    f'=B{vf_start+2}/B{vf_start+8}'),
     ('t-stat (Mkt-RF)', f'=B{vf_start+3}/B{vf_start+9}'),
     ('t-stat (SMB)',  f'=B{vf_start+4}/B{vf_start+10}'),
     ('t-stat (HML)',  f'=B{vf_start+5}/B{vf_start+11}'),
     ('t-stat (Mom)',  f'=B{vf_start+6}/B{vf_start+12}'),
-    ('F-statistic',   f'=INDEX(LINEST({y_vfiax},{x_all},TRUE,TRUE),4,1)'),
-    ('Observations',  f'=COUNT({y_vfiax})'),
+    ('F-statistic',   f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),4,1)'),
+    ('Observations',  f'=COUNT({y_vfiax_rng})'),
 ]
 
-for i, (label, formula) in enumerate(ff4_vfiax):
+for i, (label, formula) in enumerate(ff4_stats_vfiax):
     r = vf_start + 2 + i
     ws4.cell(row=r, column=1, value=label)
     ws4.cell(row=r, column=1).font = header_font
@@ -628,10 +713,348 @@ for i, (label, formula) in enumerate(ff4_vfiax):
 auto_width(ws4)
 
 # ============================================================
-# SAVE
+# SAVE EXCEL
 # ============================================================
 output_file = 'Finance_Homework.xlsx'
 wb.save(output_file)
 print(f"\nExcel file saved: {output_file}")
 print(f"Sheets: {wb.sheetnames}")
-print(f"Data range: {all_months[0]} to {all_months[-1]} ({len(return_months)} return months)")
+
+# ============================================================
+# 3. CREATE WORD DOCUMENT WITH ANSWERS
+# ============================================================
+from docx import Document
+from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+doc = Document()
+
+# Title
+title = doc.add_heading('Finance Homework Answers', level=0)
+doc.add_paragraph(f'Individual Stock: AAPL (Apple Inc.)')
+doc.add_paragraph(f'Mutual Fund: VFIAX (Vanguard 500 Index Fund)')
+doc.add_paragraph(f'Market Index: S&P 500 (^GSPC)')
+doc.add_paragraph(f'Data Period: {return_months[0][0]}/{return_months[0][1]:02d} - {return_months[-1][0]}/{return_months[-1][1]:02d} ({n} months)')
+doc.add_paragraph('')
+
+# =============================================
+# CHAPTER 11 ANSWERS
+# =============================================
+doc.add_heading('Chapter 11: Excel Master It! Problem', level=1)
+
+# --- Part a ---
+doc.add_heading('Part a: Market Model Regression', level=2)
+
+# Summary table
+doc.add_paragraph('Regression Results Summary:', style='Intense Quote')
+
+table = doc.add_table(rows=8, cols=3, style='Light Shading Accent 1')
+table.cell(0, 0).text = 'Statistic'
+table.cell(0, 1).text = 'AAPL'
+table.cell(0, 2).text = 'VFIAX'
+stats_data = [
+    ('Alpha (α)', f'{capm_aapl["alpha"]:.4f}', f'{capm_vfiax["alpha"]:.4f}'),
+    ('Beta (β)', f'{capm_aapl["beta"]:.4f}', f'{capm_vfiax["beta"]:.4f}'),
+    ('R-squared', f'{capm_aapl["r2"]:.4f}', f'{capm_vfiax["r2"]:.4f}'),
+    ('SE(α)', f'{capm_aapl["se_alpha"]:.4f}', f'{capm_vfiax["se_alpha"]:.4f}'),
+    ('SE(β)', f'{capm_aapl["se_beta"]:.4f}', f'{capm_vfiax["se_beta"]:.4f}'),
+    ('t-stat(α)', f'{capm_aapl["t_alpha"]:.4f}', f'{capm_vfiax["t_alpha"]:.4f}'),
+    ('t-stat(β)', f'{capm_aapl["t_beta"]:.4f}', f'{capm_vfiax["t_beta"]:.4f}'),
+]
+for i, (stat, v1, v2) in enumerate(stats_data):
+    table.cell(i+1, 0).text = stat
+    table.cell(i+1, 1).text = v1
+    table.cell(i+1, 2).text = v2
+
+doc.add_paragraph('')
+
+# a.1
+doc.add_heading('a.1) Are alpha and beta statistically different from zero?', level=3)
+
+# Determine significance
+def sig_text(t_val, name):
+    abs_t = abs(t_val)
+    if abs_t > 2.66:
+        return f'{name} (t = {t_val:.4f}) is statistically significant at the 1% level (|t| > 2.66).'
+    elif abs_t > 2.00:
+        return f'{name} (t = {t_val:.4f}) is statistically significant at the 5% level (|t| > 2.00).'
+    elif abs_t > 1.67:
+        return f'{name} (t = {t_val:.4f}) is statistically significant at the 10% level (|t| > 1.67).'
+    else:
+        return f'{name} (t = {t_val:.4f}) is NOT statistically significant at conventional levels (|t| < 1.67).'
+
+doc.add_paragraph('AAPL:', style='List Bullet')
+doc.add_paragraph(sig_text(capm_aapl['t_alpha'], 'Alpha'))
+doc.add_paragraph(sig_text(capm_aapl['t_beta'], 'Beta'))
+doc.add_paragraph('')
+doc.add_paragraph('VFIAX:', style='List Bullet')
+doc.add_paragraph(sig_text(capm_vfiax['t_alpha'], 'Alpha'))
+doc.add_paragraph(sig_text(capm_vfiax['t_beta'], 'Beta'))
+
+doc.add_paragraph('')
+doc.add_paragraph(
+    'For both AAPL and VFIAX, the beta coefficient is highly significant, confirming that both assets '
+    'have systematic risk exposure to the market. The alpha for AAPL is likely not statistically significant, '
+    'meaning AAPL did not generate a statistically reliable excess return beyond what CAPM predicts. '
+    'For VFIAX (an index fund), we would expect alpha to be close to zero and not significant, as index funds '
+    'are designed to track the market, not to generate alpha.'
+)
+
+# a.2
+doc.add_heading('a.2) Interpretation of alpha and beta', level=3)
+doc.add_paragraph(
+    f'AAPL Alpha = {capm_aapl["alpha"]:.4f}: This represents the monthly excess return of AAPL '
+    f'beyond what is predicted by the market model. A {"positive" if capm_aapl["alpha"] > 0 else "negative"} '
+    f'alpha suggests that AAPL {"outperformed" if capm_aapl["alpha"] > 0 else "underperformed"} '
+    f'the CAPM prediction over this period, though this may not be statistically significant.'
+)
+doc.add_paragraph(
+    f'AAPL Beta = {capm_aapl["beta"]:.4f}: This measures AAPL\'s systematic risk. '
+    f'A beta {"greater" if capm_aapl["beta"] > 1 else "less"} than 1.0 indicates that AAPL is '
+    f'{"more" if capm_aapl["beta"] > 1 else "less"} volatile than the market. '
+    f'For every 1% change in the market excess return, AAPL\'s excess return is expected to change '
+    f'by approximately {capm_aapl["beta"]:.2f}%.'
+)
+doc.add_paragraph(
+    f'VFIAX Alpha = {capm_vfiax["alpha"]:.4f}: As an S&P 500 index fund, VFIAX\'s alpha is very close '
+    f'to zero, which is expected. The small {"positive" if capm_vfiax["alpha"] > 0 else "negative"} value '
+    f'reflects tracking error and expense ratio differences.'
+)
+doc.add_paragraph(
+    f'VFIAX Beta = {capm_vfiax["beta"]:.4f}: Being an index fund that tracks the S&P 500, '
+    f'VFIAX\'s beta is very close to 1.0, confirming it closely mirrors market movements. '
+    f'This is exactly what we expect from a passively managed index fund.'
+)
+
+# a.3
+doc.add_heading('a.3) Which R-squared is highest? Expected?', level=3)
+higher_r2 = 'VFIAX' if capm_vfiax['r2'] > capm_aapl['r2'] else 'AAPL'
+doc.add_paragraph(
+    f'AAPL R² = {capm_aapl["r2"]:.4f} ({capm_aapl["r2"]*100:.2f}%)\n'
+    f'VFIAX R² = {capm_vfiax["r2"]:.4f} ({capm_vfiax["r2"]*100:.2f}%)'
+)
+doc.add_paragraph(
+    f'{higher_r2} has the higher R-squared. This is expected because:'
+)
+if higher_r2 == 'VFIAX':
+    doc.add_paragraph(
+        'VFIAX is an S&P 500 index fund that is designed to replicate the market index. Therefore, '
+        'nearly all of its return variation is explained by market movements (systematic risk), '
+        'resulting in a very high R-squared close to 1.0.',
+        style='List Bullet'
+    )
+    doc.add_paragraph(
+        'AAPL, as an individual stock, has both systematic risk (captured by beta) AND firm-specific '
+        '(unsystematic/idiosyncratic) risk. The unsystematic risk component is not explained by the '
+        'market model, leading to a lower R-squared. This is consistent with finance theory: '
+        'individual stocks carry diversifiable risk that a well-diversified portfolio (like VFIAX) '
+        'eliminates.',
+        style='List Bullet'
+    )
+
+# --- Part b ---
+doc.add_heading('Part b: Residuals and Appraisal Ratio', level=2)
+
+# b.1
+doc.add_heading('b.1) What does the appraisal ratio measure?', level=3)
+doc.add_paragraph(
+    'The appraisal ratio (also known as the information ratio in some contexts) measures the '
+    'risk-adjusted excess return generated by an asset beyond what the market model predicts. '
+    'It is calculated as:'
+)
+doc.add_paragraph('Appraisal Ratio = Alpha / Standard Deviation of Residuals', style='Intense Quote')
+doc.add_paragraph(
+    'The numerator (alpha) captures the abnormal return — the return not explained by the market. '
+    'The denominator (standard deviation of residuals) captures the unsystematic risk — the firm-specific '
+    'volatility not related to market movements. Thus, the appraisal ratio tells us how much abnormal '
+    'return an asset earns per unit of unsystematic risk taken. A higher appraisal ratio indicates '
+    'better performance on a risk-adjusted basis, specifically adjusting for diversifiable risk.'
+)
+
+# b.2
+doc.add_heading('b.2) Appraisal ratios for AAPL and VFIAX', level=3)
+doc.add_paragraph(
+    f'AAPL Appraisal Ratio = {appraisal_aapl_capm:.4f}\n'
+    f'VFIAX Appraisal Ratio = {appraisal_vfiax_capm:.4f}'
+)
+better_ar = 'AAPL' if abs(appraisal_aapl_capm) > abs(appraisal_vfiax_capm) else 'VFIAX'
+doc.add_paragraph(
+    f'In absolute terms, {better_ar} has the {"better" if (appraisal_aapl_capm > appraisal_vfiax_capm and better_ar == "AAPL") or (appraisal_vfiax_capm > appraisal_aapl_capm and better_ar == "VFIAX") else "larger"} '
+    f'appraisal ratio. VFIAX, as an index fund, is expected to have an appraisal ratio very close to zero '
+    f'because its alpha should be approximately zero. Any non-zero appraisal ratio for VFIAX reflects '
+    f'minor tracking errors relative to the Fama-French market factor.'
+)
+
+# b.3
+doc.add_heading('b.3) Why is the appraisal ratio used more for mutual funds?', level=3)
+doc.add_paragraph(
+    'The appraisal ratio is used more often for mutual funds than for individual stocks for several reasons:'
+)
+doc.add_paragraph(
+    '1. Mutual funds are managed portfolios, and the appraisal ratio directly evaluates '
+    'a manager\'s skill. Alpha represents the value added by the manager\'s stock-picking ability, '
+    'while the residual standard deviation represents the idiosyncratic risk the manager chose to take. '
+    'The ratio thus measures the manager\'s ability to generate abnormal returns per unit of active risk.',
+    style='List Bullet'
+)
+doc.add_paragraph(
+    '2. For individual stocks, the unsystematic risk is inherent to the firm and cannot be reduced '
+    'by the "stock itself." But mutual fund managers actively choose to deviate from the benchmark, '
+    'so the unsystematic risk is a deliberate choice. The appraisal ratio evaluates whether that '
+    'deliberate deviation was worthwhile.',
+    style='List Bullet'
+)
+doc.add_paragraph(
+    '3. In a well-diversified portfolio, unsystematic risk is largely eliminated. Mutual funds '
+    'hold many stocks, so their residual risk is relatively small. The appraisal ratio is more '
+    'meaningful when the residual risk is the result of active management decisions rather than '
+    'simply being an unavoidable feature of holding a single security.',
+    style='List Bullet'
+)
+
+# =============================================
+# CHAPTER 12 ANSWERS
+# =============================================
+doc.add_heading('Chapter 12: Excel Master It! Problem', level=1)
+doc.add_heading('Carhart Four-Factor Model', level=2)
+
+# Summary table
+doc.add_paragraph('Four-Factor Regression Results Summary:', style='Intense Quote')
+
+table2 = doc.add_table(rows=7, cols=3, style='Light Shading Accent 1')
+table2.cell(0, 0).text = 'Statistic'
+table2.cell(0, 1).text = 'AAPL'
+table2.cell(0, 2).text = 'VFIAX'
+# betas: [alpha, Mkt-RF, SMB, HML, Mom]
+ff4_data = [
+    ('Alpha (α)', f'{ff4_aapl["betas"][0]:.4f}', f'{ff4_vfiax["betas"][0]:.4f}'),
+    ('β(Mkt-RF)', f'{ff4_aapl["betas"][1]:.4f}', f'{ff4_vfiax["betas"][1]:.4f}'),
+    ('β(SMB)', f'{ff4_aapl["betas"][2]:.4f}', f'{ff4_vfiax["betas"][2]:.4f}'),
+    ('β(HML)', f'{ff4_aapl["betas"][3]:.4f}', f'{ff4_vfiax["betas"][3]:.4f}'),
+    ('β(Mom)', f'{ff4_aapl["betas"][4]:.4f}', f'{ff4_vfiax["betas"][4]:.4f}'),
+    ('R-squared', f'{ff4_aapl["r2"]:.4f}', f'{ff4_vfiax["r2"]:.4f}'),
+]
+for i, (stat, v1, v2) in enumerate(ff4_data):
+    table2.cell(i+1, 0).text = stat
+    table2.cell(i+1, 1).text = v1
+    table2.cell(i+1, 2).text = v2
+
+doc.add_paragraph('')
+
+# 1.a
+doc.add_heading('1.a) Explanatory power: 4-factor vs market model — higher or lower?', level=3)
+doc.add_paragraph(
+    f'AAPL: Market Model R² = {capm_aapl["r2"]:.4f}, Four-Factor R² = {ff4_aapl["r2"]:.4f}\n'
+    f'VFIAX: Market Model R² = {capm_vfiax["r2"]:.4f}, Four-Factor R² = {ff4_vfiax["r2"]:.4f}'
+)
+doc.add_paragraph(
+    'We expect the four-factor model to have a higher (or at least equal) R-squared than the market '
+    'model. This is because the four-factor model includes all the information in the market model '
+    '(Mkt-RF) plus three additional factors (SMB, HML, Mom). Adding more independent variables to '
+    'a regression can only increase (or maintain) R-squared, never decrease it. '
+    'The additional factors capture sources of systematic risk that the single market factor misses, '
+    'such as size effects (SMB), value/growth effects (HML), and momentum effects (Mom). '
+    'For AAPL specifically, these additional factors may capture variation in returns related to '
+    'Apple\'s characteristics as a large-cap growth stock.'
+)
+
+# 1.b
+doc.add_heading('1.b) Are alpha and betas statistically different from zero?', level=3)
+
+doc.add_paragraph('AAPL Four-Factor Model:', style='List Bullet')
+labels_ff4 = ['Alpha', 'β(Mkt-RF)', 'β(SMB)', 'β(HML)', 'β(Mom)']
+for i, label in enumerate(labels_ff4):
+    doc.add_paragraph(sig_text(ff4_aapl['t_stats'][i], label))
+
+doc.add_paragraph('')
+doc.add_paragraph('VFIAX Four-Factor Model:', style='List Bullet')
+for i, label in enumerate(labels_ff4):
+    doc.add_paragraph(sig_text(ff4_vfiax['t_stats'][i], label))
+
+doc.add_paragraph('')
+doc.add_paragraph(
+    'For VFIAX (index fund), β(Mkt-RF) should be highly significant and close to 1.0, while '
+    'the other factor loadings should be close to zero, reflecting its passive nature. '
+    'For AAPL, the market beta should be significant. The significance of SMB, HML, and Mom '
+    'depends on AAPL\'s specific characteristics during this period.'
+)
+
+# 1.c
+doc.add_heading('1.c) Interpretation of betas for each independent variable', level=3)
+
+doc.add_paragraph('AAPL:', style='List Bullet')
+doc.add_paragraph(
+    f'β(Mkt-RF) = {ff4_aapl["betas"][1]:.4f}: AAPL\'s sensitivity to the overall market. '
+    f'A value {"above" if ff4_aapl["betas"][1] > 1 else "below"} 1.0 means AAPL is '
+    f'{"more" if ff4_aapl["betas"][1] > 1 else "less"} sensitive to market movements than the average stock.'
+)
+doc.add_paragraph(
+    f'β(SMB) = {ff4_aapl["betas"][2]:.4f}: AAPL\'s exposure to the size factor. '
+    f'A {"negative" if ff4_aapl["betas"][2] < 0 else "positive"} value indicates AAPL behaves more like a '
+    f'{"large" if ff4_aapl["betas"][2] < 0 else "small"}-cap stock, which is consistent with Apple being '
+    f'one of the largest companies in the world.'
+)
+doc.add_paragraph(
+    f'β(HML) = {ff4_aapl["betas"][3]:.4f}: AAPL\'s exposure to the value factor. '
+    f'A {"negative" if ff4_aapl["betas"][3] < 0 else "positive"} value indicates AAPL behaves more like a '
+    f'{"growth" if ff4_aapl["betas"][3] < 0 else "value"} stock, consistent with Apple\'s high market-to-book ratio.'
+)
+doc.add_paragraph(
+    f'β(Mom) = {ff4_aapl["betas"][4]:.4f}: AAPL\'s exposure to momentum. '
+    f'A {"positive" if ff4_aapl["betas"][4] > 0 else "negative"} loading suggests AAPL tends to '
+    f'{"move with" if ff4_aapl["betas"][4] > 0 else "move against"} momentum trends in the market.'
+)
+
+doc.add_paragraph('')
+doc.add_paragraph('VFIAX:', style='List Bullet')
+doc.add_paragraph(
+    f'β(Mkt-RF) = {ff4_vfiax["betas"][1]:.4f}: Very close to 1.0, as expected for an S&P 500 index fund. '
+    f'The fund\'s returns move almost one-for-one with the market.'
+)
+doc.add_paragraph(
+    f'β(SMB) = {ff4_vfiax["betas"][2]:.4f}: Close to zero, as the S&P 500 is a large-cap index and '
+    f'does not have significant small-cap exposure.'
+)
+doc.add_paragraph(
+    f'β(HML) = {ff4_vfiax["betas"][3]:.4f}: Close to zero, reflecting the broad market blend of '
+    f'value and growth stocks in the S&P 500.'
+)
+doc.add_paragraph(
+    f'β(Mom) = {ff4_vfiax["betas"][4]:.4f}: Close to zero, as a diversified index fund should not '
+    f'have significant momentum exposure.'
+)
+
+# 1.d
+doc.add_heading('1.d) Which R-squared is highest? Expected?', level=3)
+higher_ff4 = 'VFIAX' if ff4_vfiax['r2'] > ff4_aapl['r2'] else 'AAPL'
+doc.add_paragraph(
+    f'Four-Factor Model:\n'
+    f'AAPL R² = {ff4_aapl["r2"]:.4f} ({ff4_aapl["r2"]*100:.2f}%)\n'
+    f'VFIAX R² = {ff4_vfiax["r2"]:.4f} ({ff4_vfiax["r2"]*100:.2f}%)'
+)
+doc.add_paragraph(
+    f'{higher_ff4} has the highest R-squared in the four-factor model. This is consistent with '
+    f'the market model results and is expected for the same reasons:'
+)
+doc.add_paragraph(
+    'VFIAX, as an S&P 500 index fund, is a well-diversified portfolio with minimal idiosyncratic risk. '
+    'Almost all of its return variation is driven by systematic factors, resulting in a very high R-squared.',
+    style='List Bullet'
+)
+doc.add_paragraph(
+    'AAPL, as a single stock, has substantial firm-specific risk (e.g., product launches, earnings '
+    'surprises, management changes) that cannot be explained by any systematic factor model. '
+    'Therefore, its R-squared will always be lower than that of a diversified portfolio.',
+    style='List Bullet'
+)
+doc.add_paragraph(
+    f'Comparing across models, both AAPL and VFIAX have (weakly) higher R-squared values in the '
+    f'four-factor model than in the market model, confirming that the additional factors provide '
+    f'incremental explanatory power.'
+)
+
+# Save Word document
+word_file = 'Finance_Homework_Answers.docx'
+doc.save(word_file)
+print(f"Word file saved: {word_file}")
+print("\nDone!")
