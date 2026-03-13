@@ -455,8 +455,8 @@ ret_range = [f"'Monthly Returns'!{c}{first_return_row}:{c}{last_data_row}" for c
 stats = [
     ('Mean', 'AVERAGE'),
     ('Median', 'MEDIAN'),
-    ('Std Dev', 'STDEV.S'),
-    ('Variance', 'VAR.S'),
+    ('Std Dev', 'STDEV'),
+    ('Variance', 'VAR'),
     ('Min', 'MIN'),
     ('Max', 'MAX'),
     ('Skewness', 'SKEW'),
@@ -548,7 +548,7 @@ for i in range(3):
 auto_width(ws2)
 
 # ============================================================
-# SHEET 3: Market Model (CAPM) Regression
+# SHEET 3: Market Model (CAPM) Regression — all computed values
 # ============================================================
 ws3 = wb.create_sheet("CAPM Regression")
 ws3.cell(row=1, column=1, value="Market Model (CAPM) Regression").font = title_font
@@ -556,75 +556,68 @@ ws3.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
 
 ws3.cell(row=2, column=1, value="R_i - R_f = \u03b1 + \u03b2(R_m - R_f) + \u03b5").font = Font(italic=True, size=11)
 
-y_aapl_rng = f"'Monthly Returns'!J{first_return_row}:J{last_data_row}"
-y_vfiax_rng = f"'Monthly Returns'!K{first_return_row}:K{last_data_row}"
-x_mkt_rng = f"'Monthly Returns'!M{first_return_row}:M{last_data_row}"
+def write_regression_table(ws, start_row, title, stats_list):
+    """Write a regression stats table with label/value pairs (all computed values)."""
+    ws.cell(row=start_row, column=1, value=title).font = subtitle_font
+    headers = ['Statistic', 'Value']
+    for i, h in enumerate(headers, 1):
+        ws.cell(row=start_row+1, column=i, value=h)
+    style_header(ws, start_row+1, 2)
+    for i, (label, value) in enumerate(stats_list):
+        r = start_row + 2 + i
+        ws.cell(row=r, column=1, value=label)
+        ws.cell(row=r, column=1).font = header_font
+        ws.cell(row=r, column=1).border = thin_border
+        ws.cell(row=r, column=2, value=value)
+        ws.cell(row=r, column=2).number_format = num4_format
+        ws.cell(row=r, column=2).border = thin_border
 
-# AAPL CAPM
-ws3.cell(row=4, column=1, value="AAPL Market Model").font = subtitle_font
-capm_headers = ['Statistic', 'Value']
-for i, h in enumerate(capm_headers, 1):
-    ws3.cell(row=5, column=i, value=h)
-style_header(ws3, 5, 2)
+# Compute F-stat for CAPM
+def capm_fstat(r2, n, k=2):
+    return (r2 / (k - 1)) / ((1 - r2) / (n - k))
 
-capm_stats_aapl = [
-    ('Alpha (\u03b1)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),1,2)'),
-    ('Beta (\u03b2)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),1,1)'),
-    ('R-squared', f'=RSQ({y_aapl_rng},{x_mkt_rng})'),
-    ('Std Error (\u03b1)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),2,2)'),
-    ('Std Error (\u03b2)', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),2,1)'),
-    ('t-stat (\u03b1)', '=B6/B9'),
-    ('t-stat (\u03b2)', '=B7/B10'),
-    ('F-statistic', f'=INDEX(LINEST({y_aapl_rng},{x_mkt_rng},TRUE,TRUE),4,1)'),
-    ('Observations', f'=COUNT({y_aapl_rng})'),
-    ('Std Dev of Residuals', f'=STDEV.S(\'Monthly Returns\'!Q{first_return_row}:Q{last_data_row})'),
-    ('Appraisal Ratio', '=B6/B15'),
+f_aapl_capm = capm_fstat(capm_aapl['r2'], n)
+f_vfiax_capm = capm_fstat(capm_vfiax['r2'], n)
+
+resid_std_aapl = float(np.std(capm_aapl['resid'], ddof=1))
+resid_std_vfiax = float(np.std(capm_vfiax['resid'], ddof=1))
+
+capm_aapl_stats = [
+    ('Alpha (\u03b1)', capm_aapl['alpha']),
+    ('Beta (\u03b2)', capm_aapl['beta']),
+    ('R-squared', capm_aapl['r2']),
+    ('Std Error (\u03b1)', capm_aapl['se_alpha']),
+    ('Std Error (\u03b2)', capm_aapl['se_beta']),
+    ('t-stat (\u03b1)', capm_aapl['t_alpha']),
+    ('t-stat (\u03b2)', capm_aapl['t_beta']),
+    ('F-statistic', f_aapl_capm),
+    ('Observations', n),
+    ('Std Dev of Residuals', resid_std_aapl),
+    ('Appraisal Ratio', appraisal_aapl_capm),
 ]
 
-for i, (label, formula) in enumerate(capm_stats_aapl):
-    r = 6 + i
-    ws3.cell(row=r, column=1, value=label)
-    ws3.cell(row=r, column=1).font = header_font
-    ws3.cell(row=r, column=1).border = thin_border
-    ws3.cell(row=r, column=2).value = formula
-    ws3.cell(row=r, column=2).number_format = num4_format
-    ws3.cell(row=r, column=2).border = thin_border
+write_regression_table(ws3, 4, "AAPL Market Model", capm_aapl_stats)
 
-# VFIAX CAPM
-vfiax_start = 19
-ws3.cell(row=vfiax_start, column=1, value="VFIAX Market Model").font = subtitle_font
-
-for i, h in enumerate(capm_headers, 1):
-    ws3.cell(row=vfiax_start+1, column=i, value=h)
-style_header(ws3, vfiax_start+1, 2)
-
-capm_stats_vfiax = [
-    ('Alpha (\u03b1)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),1,2)'),
-    ('Beta (\u03b2)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),1,1)'),
-    ('R-squared', f'=RSQ({y_vfiax_rng},{x_mkt_rng})'),
-    ('Std Error (\u03b1)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),2,2)'),
-    ('Std Error (\u03b2)', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),2,1)'),
-    ('t-stat (\u03b1)', f'=B{vfiax_start+2}/B{vfiax_start+5}'),
-    ('t-stat (\u03b2)', f'=B{vfiax_start+3}/B{vfiax_start+6}'),
-    ('F-statistic', f'=INDEX(LINEST({y_vfiax_rng},{x_mkt_rng},TRUE,TRUE),4,1)'),
-    ('Observations', f'=COUNT({y_vfiax_rng})'),
-    ('Std Dev of Residuals', f'=STDEV.S(\'Monthly Returns\'!R{first_return_row}:R{last_data_row})'),
-    ('Appraisal Ratio', f'=B{vfiax_start+2}/B{vfiax_start+11}'),
+capm_vfiax_stats = [
+    ('Alpha (\u03b1)', capm_vfiax['alpha']),
+    ('Beta (\u03b2)', capm_vfiax['beta']),
+    ('R-squared', capm_vfiax['r2']),
+    ('Std Error (\u03b1)', capm_vfiax['se_alpha']),
+    ('Std Error (\u03b2)', capm_vfiax['se_beta']),
+    ('t-stat (\u03b1)', capm_vfiax['t_alpha']),
+    ('t-stat (\u03b2)', capm_vfiax['t_beta']),
+    ('F-statistic', f_vfiax_capm),
+    ('Observations', n),
+    ('Std Dev of Residuals', resid_std_vfiax),
+    ('Appraisal Ratio', appraisal_vfiax_capm),
 ]
 
-for i, (label, formula) in enumerate(capm_stats_vfiax):
-    r = vfiax_start + 2 + i
-    ws3.cell(row=r, column=1, value=label)
-    ws3.cell(row=r, column=1).font = header_font
-    ws3.cell(row=r, column=1).border = thin_border
-    ws3.cell(row=r, column=2).value = formula
-    ws3.cell(row=r, column=2).number_format = num4_format
-    ws3.cell(row=r, column=2).border = thin_border
+write_regression_table(ws3, 17, "VFIAX Market Model", capm_vfiax_stats)
 
 auto_width(ws3)
 
 # ============================================================
-# SHEET 4: Fama-French 4-Factor
+# SHEET 4: Fama-French 4-Factor — all computed values
 # ============================================================
 ws4 = wb.create_sheet("FF4 Regression")
 ws4.cell(row=1, column=1, value="Fama-French 3-Factor + Momentum (Carhart 4-Factor) Regression").font = title_font
@@ -632,83 +625,52 @@ ws4.merge_cells(start_row=1, start_column=1, end_row=1, end_column=6)
 
 ws4.cell(row=2, column=1, value="R_i - R_f = \u03b1 + \u03b2\u2081(Mkt-RF) + \u03b2\u2082(SMB) + \u03b2\u2083(HML) + \u03b2\u2084(Mom) + \u03b5").font = Font(italic=True, size=11)
 
-x_all_rng = f"'Monthly Returns'!M{first_return_row}:P{last_data_row}"
-
-# AAPL FF4
-ws4.cell(row=4, column=1, value="AAPL Fama-French 4-Factor").font = subtitle_font
-
-ff4_headers = ['Statistic', 'Value']
-for i, h in enumerate(ff4_headers, 1):
-    ws4.cell(row=5, column=i, value=h)
-style_header(ws4, 5, 2)
-
-ff4_stats_aapl = [
-    ('Alpha (\u03b1)',     f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,5)'),
-    ('\u03b2 (Mkt-RF)',    f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,4)'),
-    ('\u03b2 (SMB)',       f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,3)'),
-    ('\u03b2 (HML)',       f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,2)'),
-    ('\u03b2 (Mom)',       f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),1,1)'),
-    ('R-squared',     f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),3,1)'),
-    ('SE (\u03b1)',        f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,5)'),
-    ('SE (Mkt-RF)',   f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,4)'),
-    ('SE (SMB)',      f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,3)'),
-    ('SE (HML)',      f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,2)'),
-    ('SE (Mom)',      f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),2,1)'),
-    ('t-stat (\u03b1)',    '=B6/B12'),
-    ('t-stat (Mkt-RF)', '=B7/B13'),
-    ('t-stat (SMB)',  '=B8/B14'),
-    ('t-stat (HML)',  '=B9/B15'),
-    ('t-stat (Mom)',  '=B10/B16'),
-    ('F-statistic',   f'=INDEX(LINEST({y_aapl_rng},{x_all_rng},TRUE,TRUE),4,1)'),
-    ('Observations',  f'=COUNT({y_aapl_rng})'),
+# betas order from ols_multi: [alpha, Mkt-RF, SMB, HML, Mom]
+ff4_aapl_stats = [
+    ('Alpha (\u03b1)',      ff4_aapl['betas'][0]),
+    ('\u03b2 (Mkt-RF)',     ff4_aapl['betas'][1]),
+    ('\u03b2 (SMB)',        ff4_aapl['betas'][2]),
+    ('\u03b2 (HML)',        ff4_aapl['betas'][3]),
+    ('\u03b2 (Mom)',        ff4_aapl['betas'][4]),
+    ('R-squared',      ff4_aapl['r2']),
+    ('SE (\u03b1)',         ff4_aapl['se'][0]),
+    ('SE (Mkt-RF)',    ff4_aapl['se'][1]),
+    ('SE (SMB)',       ff4_aapl['se'][2]),
+    ('SE (HML)',       ff4_aapl['se'][3]),
+    ('SE (Mom)',       ff4_aapl['se'][4]),
+    ('t-stat (\u03b1)',     ff4_aapl['t_stats'][0]),
+    ('t-stat (Mkt-RF)',ff4_aapl['t_stats'][1]),
+    ('t-stat (SMB)',   ff4_aapl['t_stats'][2]),
+    ('t-stat (HML)',   ff4_aapl['t_stats'][3]),
+    ('t-stat (Mom)',   ff4_aapl['t_stats'][4]),
+    ('F-statistic',    ff4_aapl['f_stat']),
+    ('Observations',   n),
 ]
 
-for i, (label, formula) in enumerate(ff4_stats_aapl):
-    r = 6 + i
-    ws4.cell(row=r, column=1, value=label)
-    ws4.cell(row=r, column=1).font = header_font
-    ws4.cell(row=r, column=1).border = thin_border
-    ws4.cell(row=r, column=2).value = formula
-    ws4.cell(row=r, column=2).number_format = num4_format
-    ws4.cell(row=r, column=2).border = thin_border
+write_regression_table(ws4, 4, "AAPL Fama-French 4-Factor", ff4_aapl_stats)
 
-# VFIAX FF4
-vf_start = 26
-ws4.cell(row=vf_start, column=1, value="VFIAX Fama-French 4-Factor").font = subtitle_font
-
-for i, h in enumerate(ff4_headers, 1):
-    ws4.cell(row=vf_start+1, column=i, value=h)
-style_header(ws4, vf_start+1, 2)
-
-ff4_stats_vfiax = [
-    ('Alpha (\u03b1)',     f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,5)'),
-    ('\u03b2 (Mkt-RF)',    f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,4)'),
-    ('\u03b2 (SMB)',       f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,3)'),
-    ('\u03b2 (HML)',       f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,2)'),
-    ('\u03b2 (Mom)',       f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),1,1)'),
-    ('R-squared',     f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),3,1)'),
-    ('SE (\u03b1)',        f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,5)'),
-    ('SE (Mkt-RF)',   f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,4)'),
-    ('SE (SMB)',      f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,3)'),
-    ('SE (HML)',      f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,2)'),
-    ('SE (Mom)',      f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),2,1)'),
-    ('t-stat (\u03b1)',    f'=B{vf_start+2}/B{vf_start+8}'),
-    ('t-stat (Mkt-RF)', f'=B{vf_start+3}/B{vf_start+9}'),
-    ('t-stat (SMB)',  f'=B{vf_start+4}/B{vf_start+10}'),
-    ('t-stat (HML)',  f'=B{vf_start+5}/B{vf_start+11}'),
-    ('t-stat (Mom)',  f'=B{vf_start+6}/B{vf_start+12}'),
-    ('F-statistic',   f'=INDEX(LINEST({y_vfiax_rng},{x_all_rng},TRUE,TRUE),4,1)'),
-    ('Observations',  f'=COUNT({y_vfiax_rng})'),
+ff4_vfiax_stats = [
+    ('Alpha (\u03b1)',      ff4_vfiax['betas'][0]),
+    ('\u03b2 (Mkt-RF)',     ff4_vfiax['betas'][1]),
+    ('\u03b2 (SMB)',        ff4_vfiax['betas'][2]),
+    ('\u03b2 (HML)',        ff4_vfiax['betas'][3]),
+    ('\u03b2 (Mom)',        ff4_vfiax['betas'][4]),
+    ('R-squared',      ff4_vfiax['r2']),
+    ('SE (\u03b1)',         ff4_vfiax['se'][0]),
+    ('SE (Mkt-RF)',    ff4_vfiax['se'][1]),
+    ('SE (SMB)',       ff4_vfiax['se'][2]),
+    ('SE (HML)',       ff4_vfiax['se'][3]),
+    ('SE (Mom)',       ff4_vfiax['se'][4]),
+    ('t-stat (\u03b1)',     ff4_vfiax['t_stats'][0]),
+    ('t-stat (Mkt-RF)',ff4_vfiax['t_stats'][1]),
+    ('t-stat (SMB)',   ff4_vfiax['t_stats'][2]),
+    ('t-stat (HML)',   ff4_vfiax['t_stats'][3]),
+    ('t-stat (Mom)',   ff4_vfiax['t_stats'][4]),
+    ('F-statistic',    ff4_vfiax['f_stat']),
+    ('Observations',   n),
 ]
 
-for i, (label, formula) in enumerate(ff4_stats_vfiax):
-    r = vf_start + 2 + i
-    ws4.cell(row=r, column=1, value=label)
-    ws4.cell(row=r, column=1).font = header_font
-    ws4.cell(row=r, column=1).border = thin_border
-    ws4.cell(row=r, column=2).value = formula
-    ws4.cell(row=r, column=2).number_format = num4_format
-    ws4.cell(row=r, column=2).border = thin_border
+write_regression_table(ws4, 26, "VFIAX Fama-French 4-Factor", ff4_vfiax_stats)
 
 auto_width(ws4)
 
