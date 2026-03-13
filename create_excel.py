@@ -569,7 +569,20 @@ def write_regression_table(ws, start_row, title, stats_list):
         ws.cell(row=r, column=1).font = header_font
         ws.cell(row=r, column=1).border = thin_border
         ws.cell(row=r, column=2, value=value)
-        ws.cell(row=r, column=2).number_format = num4_format
+        # Choose appropriate number format per statistic type
+        if 'Observation' in label:
+            fmt = '0'
+        elif 'R-squared' in label:
+            fmt = '0.0000'
+        elif 'F-stat' in label:
+            fmt = '0.00'
+        elif 't-stat' in label:
+            fmt = '0.0000'
+        elif 'Appraisal' in label:
+            fmt = '0.0000'
+        else:
+            fmt = '0.000000'   # Alpha, Beta, SE — need more decimal places
+        ws.cell(row=r, column=2).number_format = fmt
         ws.cell(row=r, column=2).border = thin_border
 
 # Compute F-stat for CAPM
@@ -835,16 +848,45 @@ doc.add_paragraph(
 
 # b.2
 doc.add_heading('b.2) Appraisal ratios for AAPL and VFIAX', level=3)
+
+resid_std_aapl_capm  = float(np.std(capm_aapl['resid'], ddof=1))
+resid_std_vfiax_capm = float(np.std(capm_vfiax['resid'], ddof=1))
+
+doc.add_paragraph('Calculations:', style='Intense Quote')
+table_ar = doc.add_table(rows=4, cols=3, style='Light Shading Accent 1')
+table_ar.cell(0, 0).text = 'Component'
+table_ar.cell(0, 1).text = 'AAPL'
+table_ar.cell(0, 2).text = 'VFIAX'
+ar_data = [
+    ('Alpha (α)', f'{capm_aapl["alpha"]:.6f}', f'{capm_vfiax["alpha"]:.6f}'),
+    ('Std Dev of Residuals (σ_ε)', f'{resid_std_aapl_capm:.6f}', f'{resid_std_vfiax_capm:.6f}'),
+    ('Appraisal Ratio = α / σ_ε', f'{appraisal_aapl_capm:.4f}', f'{appraisal_vfiax_capm:.4f}'),
+]
+for i, (lbl, v1, v2) in enumerate(ar_data):
+    table_ar.cell(i+1, 0).text = lbl
+    table_ar.cell(i+1, 1).text = v1
+    table_ar.cell(i+1, 2).text = v2
+
+doc.add_paragraph('')
+
+higher_ar  = 'VFIAX' if appraisal_vfiax_capm > appraisal_aapl_capm else 'AAPL'
+lower_ar   = 'AAPL'  if higher_ar == 'VFIAX' else 'VFIAX'
+
 doc.add_paragraph(
-    f'AAPL Appraisal Ratio = {appraisal_aapl_capm:.4f}\n'
-    f'VFIAX Appraisal Ratio = {appraisal_vfiax_capm:.4f}'
+    f'VFIAX has the higher appraisal ratio ({appraisal_vfiax_capm:.4f} vs {appraisal_aapl_capm:.4f} for AAPL).'
 )
-better_ar = 'AAPL' if abs(appraisal_aapl_capm) > abs(appraisal_vfiax_capm) else 'VFIAX'
 doc.add_paragraph(
-    f'In absolute terms, {better_ar} has the {"better" if (appraisal_aapl_capm > appraisal_vfiax_capm and better_ar == "AAPL") or (appraisal_vfiax_capm > appraisal_aapl_capm and better_ar == "VFIAX") else "larger"} '
-    f'appraisal ratio. VFIAX, as an index fund, is expected to have an appraisal ratio very close to zero '
-    f'because its alpha should be approximately zero. Any non-zero appraisal ratio for VFIAX reflects '
-    f'minor tracking errors relative to the Fama-French market factor.'
+    f'At first glance this may seem surprising for a passive index fund. The reason lies in the denominator: '
+    f'VFIAX\'s residual standard deviation is extremely small ({resid_std_vfiax_capm:.6f}) because it tracks '
+    f'the market nearly perfectly (R² = {capm_vfiax["r2"]:.4f}). Even though its alpha ({capm_vfiax["alpha"]:.6f}) '
+    f'is tiny, dividing by an even tinier residual standard deviation produces a non-trivial appraisal ratio. '
+    f'Economically, this small positive alpha reflects the fact that the S&P 500 (which VFIAX tracks) has '
+    f'historically slightly outperformed the Fama-French Mkt-RF factor used as the benchmark here.'
+)
+doc.add_paragraph(
+    f'AAPL has a larger alpha ({capm_aapl["alpha"]:.6f}) but also a much larger residual standard deviation '
+    f'({resid_std_aapl_capm:.6f}), reflecting substantial firm-specific (idiosyncratic) risk. '
+    f'This large unsystematic risk dilutes the alpha, resulting in a lower appraisal ratio ({appraisal_aapl_capm:.4f}).'
 )
 
 # b.3
@@ -971,19 +1013,25 @@ doc.add_paragraph('')
 doc.add_paragraph('VFIAX:', style='List Bullet')
 doc.add_paragraph(
     f'β(Mkt-RF) = {ff4_vfiax["betas"][1]:.4f}: Very close to 1.0, as expected for an S&P 500 index fund. '
-    f'The fund\'s returns move almost one-for-one with the market.'
+    f'The fund\'s returns move almost one-for-one with the market. {sig_text(ff4_vfiax["t_stats"][1], "β(Mkt-RF)")}'
 )
 doc.add_paragraph(
-    f'β(SMB) = {ff4_vfiax["betas"][2]:.4f}: Close to zero, as the S&P 500 is a large-cap index and '
-    f'does not have significant small-cap exposure.'
+    f'β(SMB) = {ff4_vfiax["betas"][2]:.4f}: This negative and statistically significant loading '
+    f'({sig_text(ff4_vfiax["t_stats"][2], "β(SMB)")}) reflects that the S&P 500 is a large-cap index. '
+    f'Large-cap stocks systematically underperform small-cap stocks on the SMB factor, so VFIAX loads '
+    f'negatively on SMB. This is an expected structural feature, not active management.'
 )
 doc.add_paragraph(
-    f'β(HML) = {ff4_vfiax["betas"][3]:.4f}: Close to zero, reflecting the broad market blend of '
-    f'value and growth stocks in the S&P 500.'
+    f'β(HML) = {ff4_vfiax["betas"][3]:.4f}: '
+    f'{sig_text(ff4_vfiax["t_stats"][3], "β(HML)")} '
+    f'The S&P 500 contains a blend of value and growth stocks; a slightly positive HML loading suggests '
+    f'a mild tilt toward value stocks in the index composition during this period.'
 )
 doc.add_paragraph(
-    f'β(Mom) = {ff4_vfiax["betas"][4]:.4f}: Close to zero, as a diversified index fund should not '
-    f'have significant momentum exposure.'
+    f'β(Mom) = {ff4_vfiax["betas"][4]:.4f}: '
+    f'{sig_text(ff4_vfiax["t_stats"][4], "β(Mom)")} '
+    f'As a fully diversified index fund, VFIAX has no deliberate momentum strategy, '
+    f'so near-zero momentum exposure is expected.'
 )
 
 # 1.d
@@ -1009,10 +1057,15 @@ doc.add_paragraph(
     'Therefore, its R-squared will always be lower than that of a diversified portfolio.',
     style='List Bullet'
 )
+aapl_r2_gain  = ff4_aapl['r2']  - capm_aapl['r2']
+vfiax_r2_gain = ff4_vfiax['r2'] - capm_vfiax['r2']
 doc.add_paragraph(
-    f'Comparing across models, both AAPL and VFIAX have (weakly) higher R-squared values in the '
-    f'four-factor model than in the market model, confirming that the additional factors provide '
-    f'incremental explanatory power.'
+    f'Comparing across models: AAPL\'s R² improved from {capm_aapl["r2"]:.4f} to {ff4_aapl["r2"]:.4f} '
+    f'(+{aapl_r2_gain:.4f}), a meaningful gain showing that SMB, HML, and Mom capture additional variation '
+    f'in AAPL\'s returns beyond just market risk. VFIAX\'s R² improved more modestly from '
+    f'{capm_vfiax["r2"]:.4f} to {ff4_vfiax["r2"]:.4f} (+{vfiax_r2_gain:.4f}), mainly due to the highly '
+    f'significant negative SMB loading — the large-cap nature of the S&P 500 is a systematic factor '
+    f'not fully captured by Mkt-RF alone.'
 )
 
 # Save Word document
